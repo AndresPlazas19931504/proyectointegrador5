@@ -1,142 +1,103 @@
-#Importamos las librerias requeridad
-
+# Importamos las librerías necesarias: sqlite3 para la base de datos, csv para manejar archivos CSV y os para operaciones del sistema operativo.
 import sqlite3, csv, os
 
-# Rutas críticas para la persistencia y la salida de datos.
-# El uso de 'db/' implica una estructura de directorios modular.
-
+# Rutas para el archivo de la base de datos SQLite y el archivo CSV de salida.
 DB_PATH, CSV_OUT = 'db/proyecto.db', 'db/export.csv'
 
-# Directorios necesarios para el proyecto (BD y datos de entrada).
-# El nombre del archivo de entrada es estático y denota la fuente de datos.
-
+# Directorios que deben existir (db para la base de datos, data para los archivos de entrada) y el nombre del archivo de datos de entrada.
 DIRS, FILENAME = ['db', 'data'], 'Estadisticas_Riegos_Laborales_Positiva-Sep_2025.csv'
 
-# Creación idempotente de directorios (Idempotence via list comprehension).
-# Asegura que las rutas 'db' y 'data' existan antes de cualquier I/O.
-
+# Crea los directorios 'db' y 'data' si aún no existen.
 [os.makedirs(d, exist_ok=True) for d in DIRS]
 
-# Lógica robusta para la detección de archivos de entrada.
-# Intenta buscar el archivo en 'data/' y en el directorio raíz.
-# Utiliza una expresión generadora `next()` para encontrar la primera ruta válida,
-# o por defecto usa la ruta esperada en 'data/' (aunque no exista, la función de dummy la creará).
+# Busca la ruta del archivo de entrada. Primero en 'data/' y luego en el directorio raíz.
+# Si no lo encuentra, usa la ruta 'data/NOMBRE_ARCHIVO' por defecto.
+file_path = next((p for p in [os.path.join('data', FILENAME), FILENAME] if os.path.exists(p)), os.path.join('data', FILENAME)
 
-file_path = next((p for p in [os.path.join('data', FILENAME), FILENAME] if os.path.exists(p)), os.path.join('data', FILENAME))
-
-# --- Funciones de Utilidad ---
+# --- Funciones Principales ---
 
 def generar_dummy_si_no_existe():
-    """
-    Genera datos de prueba (dummy data) si el archivo de entrada esperado no se encuentra.
-    Esto es crucial para asegurar la ejecutabilidad y la prueba unitaria del script ETL
-    en entornos donde la fuente de datos aún no está disponible (ej. desarrollo inicial).
-    """
+    # Esta función crea un archivo CSV de prueba con datos mínimos si el archivo de entrada no se encuentra.
     if not os.path.exists(file_path):
         print("Archivo no encontrado. Generando datos de prueba para testing...")
         
-        # Definición simplificada de la estructura de datos para el prototipo.
-
+        # Define los nombres de las columnas para el archivo de prueba.
         cols = ['ACTIVEC', 'AÑO', 'ARL', 'DPTO', 'INC_AT', 'INC_EL', 'MES', 'MPIO', 'MUERTES', 'PEN_AT', 'PEN_EL', 'PRESUNTOS', 'DEP', 'INDEP']
         
-        # Uso de `newline=''` para evitar problemas de doble espaciado en Windows,
-        # y `encoding='utf-8'` como estándar para manejo de caracteres especiales.
-
+        # Abre el archivo para escribir los datos de prueba.
         with open(file_path, 'w', newline='', encoding='utf-8') as f:
-
-            # Escribe la cabecera y una fila de datos simulados.
-
+            # Escribe la fila de encabezados y una fila de datos de ejemplo.
             csv.writer(f).writerows([cols, ['Construcción', '2023', 'ARL-1', 'Bogota', 0, 0, 'Enero', 'Bogota', 0, 0, 0, 10, 100, 20]])
 
 def procesar_etl():
-
-    """
-    Ejecuta el pipeline de Extracción, Transformación y Carga (ETL) principal.
+    # Función principal que realiza la Extracción (E), Transformación (T) y Carga (L) de datos (ETL).
     
-    1. E: Extrae datos del CSV.
-    2. T: Realiza una transformación mínima (limpieza de encabezados, inferencia de tipos).
-    3. L: Carga los datos en una base de datos SQLite (in-memory, ideal para prototipos).
-    """
+    # 1. Asegura que el archivo exista o crea uno de prueba (si es necesario).
     generar_dummy_si_no_existe()
 
-    conn = sqlite3.connect(DB_PATH) # Conexión al motor de base de datos.
+    # Conecta o crea la base de datos SQLite.
+    conn = sqlite3.connect(DB_PATH) 
     
     # --- Extracción (E) y Transformación (T) ---
     
-    # Lógica de "prueba y error" para el manejo de codificaciones.
-    # Aborda el problema común de los archivos CSV que no son estrictamente UTF-8.
-
+    # Intenta leer el archivo CSV con diferentes codificaciones (utf-8, latin-1, cp1252) para evitar errores.
     for enc in ['utf-8', 'latin-1', 'cp1252']:
 
         try:
 
             with open(file_path, encoding=enc) as f:
-                # Detección dinámica del dialecto CSV (separador, comillas).
-                # Se lee un fragmento inicial para inferir el formato.
-
+                # Lee un fragmento del archivo para detectar automáticamente el formato (separador, comillas, etc.).
                 dialect = csv.Sniffer().sniff(f.read(1024)); f.seek(0)
                 reader = csv.DictReader(f, dialect=dialect)
                 
-                # Pre-procesamiento de encabezados: estandarización/limpieza de espacios.
-
+                # Prepara los nombres de las columnas, eliminando espacios al inicio y final.
                 headers = [h.strip() for h in reader.fieldnames]
                 
                 # --- Carga (L) a SQLite ---
                 
-                # *** 1. Estrategia de Carga: TRUNCATE & LOAD (Reinicialización) ***
-                # Se elimina la tabla si existe y se recrea para un ciclo de carga limpio.
-
+                # Elimina la tabla 'reporte_arl' si ya existe para empezar una carga limpia.
                 conn.execute("DROP TABLE IF EXISTS reporte_arl")
                 
-                # Generación dinámica del DDL (Data Definition Language) para la tabla.
-                # Nota: Se usa TEXT para todos los campos, simplificando la inferencia de tipos,
-                # lo cual es común en la etapa de 'staging' de un ETL. Los espacios se reemplazan.
-
+                # Crea la sentencia SQL para crear la tabla usando los encabezados del CSV.
+                # Todos los campos se definen como TEXTO y los espacios en los nombres se reemplazan por guiones bajos.
                 column_defs = ', '.join(h.replace(' ', '_') + ' TEXT' for h in headers)
                 conn.execute(f"CREATE TABLE reporte_arl ({column_defs})")
                 
-                # Preparación para Inserción Masiva (Bulk Insert) para optimizar el rendimiento.
-                # Se mapean los datos del lector a una lista de tuplas.
-
+                # Prepara la sentencia INSERT (con '?') y extrae los datos del lector CSV.
                 placeholders = ','.join(['?'] * len(headers))
+                # Los datos se transforman en una lista de tuplas para la inserción masiva.
                 data = [tuple(row[h] for h in reader.fieldnames) for row in reader]
                 
-                # `executemany` es más eficiente que múltiples `execute`.
-
+                # Inserta todos los datos de golpe (executemany) para mayor eficiencia.
                 conn.executemany(f"INSERT INTO reporte_arl VALUES ({placeholders})", data)
-                conn.commit() # Transacción: Persiste los cambios a disco.
+                conn.commit() # Guarda los cambios en la base de datos.
                 
                 print(f"Carga exitosa (Encoding: {enc}). {len(data)} registros importados a SQLite.")
-                break # Éxito: Salir del bucle de codificación.
+                break # Si tiene éxito, sale del bucle de codificación.
                 
-        # Manejo de excepciones específicas de I/O y formato CSV.
-
+        # Si la codificación falla o hay un error de formato CSV, intenta con la siguiente codificación.
         except (UnicodeDecodeError, csv.Error): continue 
     
-    # --- Exportación Final (Post-Procesamiento/Reporte) ---
+    # --- Exportación Final (Reporte) ---
     
-    # Recuperación de todos los datos cargados para exportar (SELECT *).
-
+    # Consulta todos los datos cargados en la tabla.
     cursor = conn.execute("SELECT * FROM reporte_arl")
     rows = cursor.fetchall()
     
     if rows:
-
-        # Recuperación de los nombres de columna correctos del objeto Cursor.
-
+        # Obtiene los nombres de las columnas desde el cursor de la base de datos.
         column_names = list(map(lambda x: x[0], cursor.description))
         
+        # Abre el archivo de salida CSV para escribir el reporte final.
         with open(CSV_OUT, 'w', newline='', encoding='utf-8') as f:
-
-            # Escribe primero la cabecera, luego las filas de datos.
-
+            # Escribe los nombres de las columnas y luego todas las filas de datos.
             csv.writer(f).writerows([column_names] + rows)
         print(f"Exportación finalizada: {CSV_OUT}")
         
-    conn.close() # Cierre limpio de la conexión a la base de datos.
+    conn.close() # Cierra la conexión a la base de datos.
 
-# --- Punto de Entrada del Script (Main Execution Block) ---
+# --- Bloque de Ejecución ---
 
-if __name__ == '__main__': 
-    # Patrón de ejecución estándar para scripts modulares.
+if __name__ == '__main__':  
+    # Ejecuta la función principal cuando el script se corre directamente.
     procesar_etl()
