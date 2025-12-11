@@ -1,6 +1,8 @@
 # Importamos las librerías necesarias: sqlite3 para la base de datos, csv para manejar archivos CSV y os para operaciones del sistema operativo.
 import sqlite3, csv, os
 
+# --- Configuración de Rutas y Archivos ---
+
 # Rutas para el archivo de la base de datos SQLite y el archivo CSV de salida.
 DB_PATH, CSV_OUT = 'db/proyecto.db', 'db/export.csv'
 
@@ -12,7 +14,7 @@ DIRS, FILENAME = ['db', 'data'], 'Estadisticas_Riegos_Laborales_Positiva-Sep_202
 
 # Busca la ruta del archivo de entrada. Primero en 'data/' y luego en el directorio raíz.
 # Si no lo encuentra, usa la ruta 'data/NOMBRE_ARCHIVO' por defecto.
-file_path = next((p for p in [os.path.join('data', FILENAME), FILENAME] if os.path.exists(p)), os.path.join('data', FILENAME)
+file_path = next((p for p in [os.path.join('data', FILENAME), FILENAME] if os.path.exists(p)), os.path.join('data', FILENAME))
 
 # --- Funciones Principales ---
 
